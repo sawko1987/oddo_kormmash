@@ -212,7 +212,17 @@ class MrpBomImport(models.Model):
             currency = self.env['res.currency'].search([('symbol', '=', currency_code)], limit=1)
         return currency or self.env.company.currency_id
 
-    def get_or_create_product(self, code_1c, name, object_type='consu', product_cache=None):
+    def get_manufacture_route(self):
+        """Получить маршрут Manufacture для текущей компании"""
+        manufacture_route = self.env['stock.route'].search([
+            ('rule_ids.action', '=', 'manufacture'),
+            '|',
+            ('company_id', '=', self.env.company.id),
+            ('company_id', '=', False)
+        ], limit=1)
+        return manufacture_route
+
+    def get_or_create_product(self, code_1c, name, object_type='consu', product_cache=None, has_bom=False):
         """Получить или создать продукт по коду 1С
         
         Args:
@@ -277,6 +287,12 @@ class MrpBomImport(models.Model):
         # Сохраняем в кеш
         if product_cache is not None:
             product_cache[code_1c] = product
+        
+        # Если продукт является номенклатурой (имеет BOM), добавляем маршрут Manufacture
+        if has_bom and product.product_tmpl_id.type == 'product':
+            manufacture_route = self.get_manufacture_route()
+            if manufacture_route and manufacture_route not in product.product_tmpl_id.route_ids:
+                product.product_tmpl_id.route_ids = [(4, manufacture_route.id)]
         
         return product
 
@@ -446,6 +462,54 @@ class MrpBomImport(models.Model):
                         
                         row_objects[row_num] = product
                         bom_by_row[row_num] = bom
+                        
+                        # Добавляем маршрут Manufacture для номенклатуры с BOM
+                        if product.product_tmpl_id.type == 'product':
+                            manufacture_route = self.get_manufacture_route()
+                            if manufacture_route and manufacture_route not in product.product_tmpl_id.route_ids:
+                                product.product_tmpl_id.route_ids = [(4, manufacture_route.id)]
+                        
+                        # Проверка: если номенклатура является компонентом другого изделия (подсборка)
+                        owner_row = row_data.get('owner_row_number', 0)
+                        if owner_row and owner_row in bom_by_row:
+                            parent_bom = bom_by_row[owner_row]
+                            
+                            # Количество
+                            qty = row_data.get('norm_per_product') or row_data.get('qty_per_detail') or 1.0
+                            try:
+                                qty = float(qty) if qty else 1.0
+                            except (ValueError, TypeError):
+                                qty = 1.0
+                            
+                            # Единица измерения
+                            uom_name = row_data.get('uom', '')
+                            uom = self.get_or_create_uom(uom_name)
+                            
+                            # Проверка существования строки BOM с использованием кеша
+                            bom_line_key = (parent_bom.id, product.id)
+                            bom_line = bom_line_cache.get(bom_line_key)
+                            if not bom_line:
+                                bom_line = self.env['mrp.bom.line'].search([
+                                    ('bom_id', '=', parent_bom.id),
+                                    ('product_id', '=', product.id)
+                                ], limit=1)
+                                if bom_line:
+                                    bom_line_cache[bom_line_key] = bom_line
+                            
+                            if not bom_line:
+                                bom_line = self.env['mrp.bom.line'].create({
+                                    'bom_id': parent_bom.id,
+                                    'product_id': product.id,
+                                    'product_qty': qty,
+                                    'product_uom_id': uom.id,
+                                })
+                                bom_line_cache[bom_line_key] = bom_line
+                                stats['bom_lines_created'] += 1
+                            elif update_existing:
+                                bom_line.write({
+                                    'product_qty': qty,
+                                    'product_uom_id': uom.id,
+                                })
                     
                     # Обработка материалов
                     elif 'материал' in object_type.lower():
