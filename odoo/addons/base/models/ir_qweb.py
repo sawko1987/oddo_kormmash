@@ -430,6 +430,8 @@ _SAFE_QWEB_OPCODES = _EXPR_OPCODES.union(to_opcodes([
     'STORE_SUBSCR',
     'LOAD_GLOBAL',
     'EXTENDED_ARG',
+    # Python 3.14: new opcodes for optimized control flow
+    'NOT_TAKEN',  # Used in optimized if/else and loops
     # Following opcodes were added in 3.11 https://docs.python.org/3/whatsnew/3.11.html#new-opcodes
     'RESUME',
     'CALL',

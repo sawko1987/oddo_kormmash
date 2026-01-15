@@ -1,0 +1,51 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <!-- Wizard Form View -->
+    <record id="view_mrp_xls_import_wizard_form" model="ir.ui.view">
+        <field name="name">mrp.xls.import.wizard.form</field>
+        <field name="model">mrp.xls.import.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Import XLS File">
+                <group>
+                    <group>
+                        <field name="file" filename="file_name" options="{'accepted_file_extensions': '.xls,.xlsx'}" required="1"/>
+                        <field name="file_name" invisible="1"/>
+                        <field name="update_existing"/>
+                    </group>
+                </group>
+                
+                <group invisible="not show_result">
+                    <field name="import_result" nolabel="1" widget="html"/>
+                </group>
+                
+                <footer>
+                    <button name="action_import" string="Import" type="object" class="btn-primary" invisible="show_result"/>
+                    <button name="action_close" string="Close" type="object" class="btn-secondary" invisible="not show_result"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel" invisible="show_result"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <!-- Wizard Action -->
+    <record id="action_mrp_xls_import_wizard" model="ir.actions.act_window">
+        <field name="name">Import XLS File</field>
+        <field name="res_model">mrp.xls.import.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+    </record>
+
+    <!-- Menu Item in Configuration (for managers) -->
+    <menuitem id="menu_mrp_xls_import_config"
+              name="Import from XLS"
+              parent="mrp.menu_mrp_configuration"
+              action="action_mrp_xls_import_wizard"
+              sequence="100"/>
+    
+    <!-- Menu Item in Products section (for all users) -->
+    <menuitem id="menu_mrp_xls_import"
+              name="Import from XLS"
+              parent="mrp.menu_mrp_bom"
+              action="action_mrp_xls_import_wizard"
+              sequence="100"/>
+</odoo>

@@ -275,6 +275,15 @@ def init_logger():
     handler.setFormatter(formatter)
     logging.getLogger().addHandler(handler)
     logging.getLogger('werkzeug').addFilter(perf_filter)
+    
+    # Добавляем обработчик для вывода в консоль, если логи идут в файл
+    # Это позволяет видеть логи запуска и парсинга в терминале
+    if tools.config['logfile'] and isinstance(handler, (logging.FileHandler, WatchedFileHandler)):
+        console_handler = logging.StreamHandler(sys.stdout)
+        console_formatter = logging.Formatter(format)
+        console_handler.setFormatter(console_formatter)
+        console_handler.setLevel(logging.INFO)  # Выводим INFO и выше в консоль
+        logging.getLogger().addHandler(console_handler)
 
     if tools.config['log_db']:
         db_levels = {

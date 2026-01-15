@@ -221,6 +221,9 @@ class ThreadedWSGIServerReloadable(LoggingBaseWSGIServerMixIn, werkzeug.serving.
     socket open when a reload happens.
     """
     def __init__(self, host, port, app):
+        # Сохраняем host и port для использования в server_bind()
+        self._host = host
+        self._port = port
         # The ODOO_MAX_HTTP_THREADS environment variable allows to limit the amount of concurrent
         # socket connections accepted by a threaded server, implicitly limiting the amount of
         # concurrent threads running for http requests handling.
@@ -243,6 +246,7 @@ class ThreadedWSGIServerReloadable(LoggingBaseWSGIServerMixIn, werkzeug.serving.
         self.daemon_threads = False
 
     def server_bind(self):
+        _logger.info("ThreadedWSGIServerReloadable.server_bind() - Привязка сервера к адресу...")
         SD_LISTEN_FDS_START = 3
         if os.environ.get('LISTEN_FDS') == '1' and os.environ.get('LISTEN_PID') == str(os.getpid()):
             self.reload_socket = True
@@ -250,8 +254,23 @@ class ThreadedWSGIServerReloadable(LoggingBaseWSGIServerMixIn, werkzeug.serving.
             _logger.info('HTTP service (werkzeug) running through socket activation')
         else:
             self.reload_socket = False
+            _logger.info("Привязка к %s:%s...", self._host, self._port)
             super(ThreadedWSGIServerReloadable, self).server_bind()
-            _logger.info('HTTP service (werkzeug) running on %s:%s', self.server_name, self.server_port)
+            # После server_bind() используем сохраненные значения для логирования
+            # так как server_name и server_port могут быть недоступны
+            server_name = self._host
+            server_port = self._port
+            # Пытаемся получить реальные значения после привязки, если доступны
+            try:
+                if hasattr(self, 'server_address') and self.server_address:
+                    server_name = self.server_address[0] if self.server_address[0] else server_name
+                    server_port = self.server_address[1] if self.server_address[1] else server_port
+            except Exception:
+                pass  # Используем сохраненные значения
+            _logger.info('=' * 60)
+            _logger.info('HTTP service (werkzeug) running on %s:%s', server_name, server_port)
+            _logger.info('=' * 60)
+            _logger.info("Сервер готов принимать подключения!")
 
     def server_activate(self):
         if not self.reload_socket:
@@ -587,14 +606,18 @@ class ThreadedServer(CommonServer):
             _logger.debug("cron%d started!", i)
 
     def http_spawn(self):
+        _logger.info("Создание HTTP сервера (werkzeug) на %s:%s...", self.interface, self.port)
         self.httpd = ThreadedWSGIServerReloadable(self.interface, self.port, self.app)
+        _logger.info("HTTP сервер создан, запуск потока serve_forever...")
         threading.Thread(
             target=self.httpd.serve_forever,
             name="odoo.service.httpd",
             daemon=True,
         ).start()
+        _logger.info("Поток HTTP сервера запущен")
 
     def start(self, stop=False):
+        _logger.info("ThreadedServer.start() - Начало инициализации")
         _logger.debug("Setting signal handlers")
         set_limit_memory_hard()
         if os.name == 'posix':
@@ -612,7 +635,13 @@ class ThreadedServer(CommonServer):
 
         if config['test_enable'] or (config['http_enable'] and not stop):
             # some tests need the http daemon to be available...
+            _logger.info("Запуск HTTP сервера (http_enable=%s, test_enable=%s, stop=%s)...", 
+                        config['http_enable'], config['test_enable'], stop)
             self.http_spawn()
+            _logger.info("HTTP сервер запущен")
+        else:
+            _logger.info("HTTP сервер не запускается (http_enable=%s, test_enable=%s, stop=%s)", 
+                        config['http_enable'], config['test_enable'], stop)
 
     def stop(self):
         """ Shutdown the WSGI server. Wait for non daemon threads.
@@ -663,9 +692,14 @@ class ThreadedServer(CommonServer):
         The first SIGINT or SIGTERM signal will initiate a graceful shutdown while
         a second one if any will force an immediate exit.
         """
+        _logger.info("ThreadedServer.run() - Начало выполнения")
         with Registry._lock:
+            _logger.info("Вызов ThreadedServer.start()...")
             self.start(stop=stop)
+            _logger.info("ThreadedServer.start() завершен")
+            _logger.info("Предзагрузка регистров баз данных...")
             rc = preload_registries(preload)
+            _logger.info("Предзагрузка регистров завершена")
 
         if stop:
             if config['test_enable']:
@@ -680,7 +714,12 @@ class ThreadedServer(CommonServer):
             self.stop()
             return rc
 
+        _logger.info("Запуск cron потоков...")
         self.cron_spawn()
+        _logger.info("Cron потоки запущены")
+        _logger.info("=" * 60)
+        _logger.info("ODOO СЕРВЕР УСПЕШНО ЗАПУЩЕН И ГОТОВ К РАБОТЕ")
+        _logger.info("=" * 60)
 
         # Wait for a first signal to be handled. (time.sleep will be interrupted
         # by the signal handler)
@@ -1543,16 +1582,29 @@ def start(preload=None, stop=False):
     """
     global server
 
+    _logger.info("=" * 60)
+    _logger.info("НАЧАЛО ЗАПУСКА ODOO СЕРВЕРА")
+    _logger.info("=" * 60)
+    _logger.info("Загрузка серверных модулей...")
+    
     load_server_wide_modules()
+    _logger.info("Серверные модули загружены")
+    
+    _logger.info("Импорт HTTP модуля...")
     import odoo.http  # noqa: PLC0415
+    _logger.info("HTTP модуль импортирован")
 
     if odoo.evented:
+        _logger.info("Создание GeventServer...")
         server = GeventServer(odoo.http.root)
+        _logger.info("GeventServer создан")
     elif config['workers']:
         if config['test_enable']:
             _logger.warning("Unit testing in workers mode could fail; use --workers 0.")
 
+        _logger.info("Создание PreforkServer (workers=%d)...", config['workers'])
         server = PreforkServer(odoo.http.root)
+        _logger.info("PreforkServer создан")
     else:
         if platform.system() == "Linux" and sys.maxsize > 2**32 and "MALLOC_ARENA_MAX" not in os.environ:
             # glibc's malloc() uses arenas [1] in order to efficiently handle memory allocation of multi-threaded
@@ -1576,7 +1628,9 @@ def start(preload=None, stop=False):
                 assert libc.mallopt(ctypes.c_int(M_ARENA_MAX), ctypes.c_int(2))
             except Exception:
                 _logger.warning("Could not set ARENA_MAX through mallopt()")
+        _logger.info("Создание ThreadedServer...")
         server = ThreadedServer(odoo.http.root)
+        _logger.info("ThreadedServer создан")
 
     watcher = None
     if 'reload' in config['dev_mode'] and not odoo.evented:
