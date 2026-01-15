@@ -1086,6 +1086,12 @@ class OrderedSet(MutableSet[T], typing.Generic[T]):
     def __repr__(self):
         return f'{type(self).__name__}({list(self)!r})'
 
+    def copy(self):
+        """Return a shallow copy of the OrderedSet."""
+        new = OrderedSet()
+        new._map = self._map.copy()
+        return new
+
     def intersection(self, *others):
         return reduce(OrderedSet.__and__, others, self)
 

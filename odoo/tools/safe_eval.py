@@ -89,6 +89,7 @@ _CONST_OPCODES = set(to_opcodes([
     # stack manipulations
     'POP_TOP', 'ROT_TWO', 'ROT_THREE', 'ROT_FOUR', 'DUP_TOP', 'DUP_TOP_TWO',
     'LOAD_CONST',
+    'LOAD_SMALL_INT',  # Python 3.14: optimized loading of small integers
     'RETURN_VALUE',  # return the result of the literal/expr evaluation
     # literal collections
     'BUILD_LIST', 'BUILD_MAP', 'BUILD_TUPLE', 'BUILD_SET',
@@ -132,7 +133,8 @@ _EXPR_OPCODES = _CONST_OPCODES.union(to_opcodes([
 
 _SAFE_OPCODES = _EXPR_OPCODES.union(to_opcodes([
     'POP_BLOCK', 'POP_EXCEPT',
-
+    # Python 3.14: new opcodes for optimized control flow
+    'NOT_TAKEN',  # Used in optimized if/else and loops
     # note: removed in 3.8
     'SETUP_LOOP', 'SETUP_EXCEPT', 'BREAK_LOOP', 'CONTINUE_LOOP',
 
