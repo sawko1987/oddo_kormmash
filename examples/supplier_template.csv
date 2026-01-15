@@ -1,0 +1,6 @@
+name,email,phone,is_company,company_type,supplier_rank,customer_rank,currency_id,property_payment_term_id,comment
+Поставщик Металлопрокат,metal@example.com,+7-999-123-45-67,True,supplier,1,0,USD,,
+Поставщик Крепеж,fasteners@example.com,+7-999-123-45-68,True,supplier,1,0,USD,,
+Поставщик Электроника,electronics@example.com,+7-999-123-45-69,True,supplier,1,0,USD,,
+Поставщик Подшипники,bearings@example.com,+7-999-123-45-70,True,supplier,1,0,USD,,
+Поставщик Гидравлика,hydraulics@example.com,+7-999-123-45-71,True,supplier,1,0,USD,,

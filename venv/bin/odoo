@@ -1,0 +1,6 @@
+#!/home/sawko1987/ Odoo/venv/bin/python3
+
+import odoo.cli
+
+if __name__ == "__main__":
+    odoo.cli.main()

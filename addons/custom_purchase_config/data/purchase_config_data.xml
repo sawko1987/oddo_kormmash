@@ -1,0 +1,19 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Настройка параметров компании для закупок -->
+        <!-- Эти настройки можно изменить через Settings → Purchase -->
+        
+        <!-- Пример настройки двухэтапного утверждения заказов -->
+        <!-- Раскомментируйте и измените company_id на ID вашей компании -->
+        <!--
+        <record id="res_company_purchase_config" model="res.company">
+            <field name="id" ref="base.main_company"/>
+            <field name="po_double_validation">two_step</field>
+            <field name="po_double_validation_amount">50000.0</field>
+            <field name="po_lock">lock</field>
+        </record>
+        -->
+        
+    </data>
+</odoo>

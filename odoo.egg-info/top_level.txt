@@ -1,0 +1,7 @@
+addons
+debian
+doc
+odoo
+setup
+var
+venv
