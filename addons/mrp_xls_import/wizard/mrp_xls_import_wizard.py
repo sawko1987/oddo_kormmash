@@ -80,6 +80,11 @@ class MrpXlsImportWizard(models.TransientModel):
             _logger.info("============================================================")
             _logger.info("  СТАТИСТИКА ИМПОРТА")
             _logger.info("============================================================")
+            if stats.get('main_product_name'):
+                _logger.info("  Главное изделие:           %s (ID: %s, BOM ID: %s)", 
+                            stats['main_product_name'], 
+                            stats.get('main_product_id', 'N/A'),
+                            stats.get('main_bom_id', 'N/A'))
             _logger.info("  Продуктов создано:        %d", stats['products_created'])
             _logger.info("  Продуктов обновлено:      %d", stats['products_updated'])
             _logger.info("  BOM создано:              %d", stats['boms_created'])
@@ -94,6 +99,14 @@ class MrpXlsImportWizard(models.TransientModel):
             # Показываем сообщение об успехе
             message = _(
                 "Import completed successfully!\n"
+            )
+            if stats.get('main_product_name'):
+                message += _(
+                    "Main Product: %(main_product)s\n"
+                ) % {
+                    'main_product': stats['main_product_name'],
+                }
+            message += _(
                 "Products created: %(created)d\n"
                 "BOMs created: %(boms)d\n"
                 "BOM lines created: %(lines)d\n"
@@ -141,13 +154,96 @@ class MrpXlsImportWizard(models.TransientModel):
 
     def _format_import_result(self, stats, total_rows):
         """Форматирование результата импорта в HTML"""
+        # Информация о всех обработанных продуктах
+        products_info = ""
+        products_processed = stats.get('products_processed', [])
+        
+        if products_processed:
+            products_info = """
+            <div class="alert alert-success" role="alert">
+                <h4>Обработанные продукты (уровень 1)</h4>
+                <p><strong>Всего продуктов обработано:</strong> {}</p>
+                <table class="table table-sm table-bordered">
+                    <thead>
+                        <tr>
+                            <th>№</th>
+                            <th>Название продукта</th>
+                            <th>Product ID</th>
+                            <th>BOM ID</th>
+                            <th>Продуктов создано</th>
+                            <th>BOM создано</th>
+                            <th>Строк BOM</th>
+                            <th>Операций</th>
+                            <th>Номенклатура 2</th>
+                            <th>Номенклатура 3</th>
+                            <th>Материалы</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            """.format(len(products_processed))
+            
+            for idx, product in enumerate(products_processed, 1):
+                hierarchy = product.get('hierarchy', {})
+                products_info += f"""
+                        <tr>
+                            <td>{idx}</td>
+                            <td><strong>{product.get('name', 'N/A')}</strong></td>
+                            <td>{product.get('product_id', 'N/A')}</td>
+                            <td>{product.get('bom_id', 'N/A')}</td>
+                            <td>{product.get('products_created', 0)}</td>
+                            <td>{product.get('boms_created', 0)}</td>
+                            <td>{product.get('bom_lines_created', 0)}</td>
+                            <td>{product.get('operations_created', 0)}</td>
+                            <td>{hierarchy.get('level_2_nomenclature', 0)}</td>
+                            <td>{hierarchy.get('level_3_nomenclature', 0)}</td>
+                            <td>{hierarchy.get('materials', 0)}</td>
+                        </tr>
+                """
+            
+            products_info += """
+                    </tbody>
+                </table>
+                <p><em>Вы можете создать производственные заказы для этих продуктов.</em></p>
+            </div>
+            """
+        elif stats.get('main_product_name'):
+            # Обратная совместимость для старого формата
+            products_info = f"""
+            <div class="alert alert-success" role="alert">
+                <h4>Главный продукт</h4>
+                <p><strong>Название:</strong> {stats['main_product_name']}</p>
+                <p><strong>Product ID:</strong> {stats.get('main_product_id', 'N/A')}</p>
+                <p><strong>BOM ID:</strong> {stats.get('main_bom_id', 'N/A')}</p>
+                <p><em>Вы можете создать производственный заказ для этого продукта.</em></p>
+            </div>
+            """
+        
+        # Статистика по иерархии
+        hierarchy_stats = stats.get('hierarchy_stats', {})
+        hierarchy_info = ""
+        if hierarchy_stats:
+            hierarchy_info = f"""
+            <div class="alert alert-info" role="alert">
+                <h4>Статистика по уровням иерархии</h4>
+                <ul>
+                    <li><strong>Продукты уровня 1:</strong> {hierarchy_stats.get('level_1_products', 0)}</li>
+                    <li><strong>Номенклатура уровня 2:</strong> {hierarchy_stats.get('level_2_nomenclature', 0)}</li>
+                    <li><strong>Номенклатура уровня 3:</strong> {hierarchy_stats.get('level_3_nomenclature', 0)}</li>
+                    <li><strong>Материалы:</strong> {hierarchy_stats.get('materials', 0)}</li>
+                    <li><strong>Операции:</strong> {hierarchy_stats.get('operations', 0)}</li>
+                </ul>
+            </div>
+            """
+        
         html = f"""
         <div class="o_form_view">
             <div class="alert alert-info" role="alert">
-                <h4>Import Statistics</h4>
-                <p><strong>Total rows processed:</strong> {total_rows}</p>
+                <h4>Статистика импорта</h4>
+                <p><strong>Всего строк обработано:</strong> {total_rows}</p>
+                <p><strong>Продуктов обработано:</strong> {len(products_processed) if products_processed else (1 if stats.get('main_product_name') else 0)}</p>
             </div>
-            
+            {hierarchy_info}
+            {products_info}
             <table class="table table-sm">
                 <thead>
                     <tr>
@@ -203,6 +299,54 @@ class MrpXlsImportWizard(models.TransientModel):
             
             html += """
                 </ul>
+            </div>
+            """
+        
+        # Предупреждения о проблемных строках
+        problematic_rows = stats.get('problematic_rows', [])
+        if problematic_rows:
+            html += """
+            <div class="alert alert-warning" role="alert">
+                <h4>Предупреждения: Строки уровня 2+ без owner_row ({})</h4>
+                <p><strong>ВНИМАНИЕ:</strong> У изделий уровня 2 и выше должен быть заполнен owner_row_number!</p>
+                <p>Следующие строки были автоматически связаны с продуктом уровня 1:</p>
+                <table class="table table-sm table-bordered">
+                    <thead>
+                        <tr>
+                            <th>№</th>
+                            <th>row_number</th>
+                            <th>Уровень</th>
+                            <th>Тип</th>
+                            <th>Название</th>
+                            <th>owner_name</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+            """.format(len(problematic_rows))
+            
+            for idx, row_info in enumerate(problematic_rows[:10], 1):
+                html += f"""
+                        <tr>
+                            <td>{idx}</td>
+                            <td>{row_info.get('row_number', 'N/A')}</td>
+                            <td>{row_info.get('hierarchy_level', 'N/A')}</td>
+                            <td>{row_info.get('object_type', 'N/A')}</td>
+                            <td>{row_info.get('object_name', 'N/A')}</td>
+                            <td>{row_info.get('owner_name', 'N/A')}</td>
+                        </tr>
+                """
+            
+            if len(problematic_rows) > 10:
+                html += f"""
+                        <tr>
+                            <td colspan="6"><em>... и еще {len(problematic_rows) - 10} строк</em></td>
+                        </tr>
+                """
+            
+            html += """
+                    </tbody>
+                </table>
+                <p><em>Проверьте файл и убедитесь, что owner_row_number заполнен для всех строк уровня 2+.</em></p>
             </div>
             """
         
