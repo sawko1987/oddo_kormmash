@@ -106,36 +106,57 @@ class MrpBomImport(models.Model):
                             cell_value = sheet.cell_value(row_idx, col_idx)
                             # Обработка различных типов данных
                             if isinstance(cell_value, float):
-                                # Проверка на целое число
-                                if cell_value == int(cell_value):
-                                    cell_value = int(cell_value)
                                 # Проверка на NaN
-                                elif cell_value != cell_value:  # NaN check
-                                    cell_value = ''
+                                if cell_value != cell_value:  # NaN check
+                                    # Для числовых полей NaN преобразуем в None, для остальных в ''
+                                    if key in ('qty_per_detail', 'norm_per_product', 'owner_row_number', 'hierarchy_level'):
+                                        cell_value = None
+                                    else:
+                                        cell_value = ''
+                                # Проверка на целое число (для owner_row_number и hierarchy_level)
+                                elif key in ('owner_row_number', 'hierarchy_level') and cell_value == int(cell_value):
+                                    cell_value = int(cell_value)
+                                # Для остальных числовых полей оставляем как float
                             elif cell_value is None:
-                                cell_value = ''
+                                # Для числовых полей None оставляем как None, для остальных в ''
+                                if key in ('qty_per_detail', 'norm_per_product', 'owner_row_number', 'hierarchy_level'):
+                                    cell_value = None
+                                else:
+                                    cell_value = ''
+                            elif isinstance(cell_value, str):
+                                # Для числовых полей пустые строки преобразуем в None
+                                if key in ('qty_per_detail', 'norm_per_product', 'owner_row_number', 'hierarchy_level'):
+                                    if not cell_value.strip():
+                                        cell_value = None
                             row_data[key] = cell_value
                         else:
-                            row_data[key] = ''
+                            # Для числовых полей используем None вместо ''
+                            if key in ('qty_per_detail', 'norm_per_product', 'owner_row_number', 'hierarchy_level'):
+                                row_data[key] = None
+                            else:
+                                row_data[key] = ''
                     
-                    # Пропускаем пустые строки
+                    # Обрабатываем строки, если есть данные (не пропускаем, если пустой только product_name)
                     row_num = row_data.get('row_number')
-                    object_name = row_data.get('object_name') or row_data.get('product_name')
-                    if not row_num and not object_name:
+                    object_name = row_data.get('object_name', '').strip()
+                    product_name = row_data.get('product_name', '').strip()
+                    object_type = str(row_data.get('object_type', '')).strip()
+                    code_1c = row_data.get('code_1c', '')
+                    
+                    # Пропускаем только полностью пустые строки (нет row_num, object_name, object_type, code_1c)
+                    if not row_num and not object_name and not object_type and not code_1c:
                         skipped_count += 1
                         if row_idx == start_row or (row_idx - start_row) % 100 == 0:
-                            _logger.debug("Строка %d пропущена (пустая): row_num=%s, object_name=%s", 
-                                         row_idx, row_num, object_name)
+                            _logger.debug("Строка %d пропущена (полностью пустая)", row_idx)
                         continue
                     
-                    # Валидация обязательных полей для обработки
-                    if row_num:
-                        rows_data.append(row_data)
-                        processed_count += 1
-                        # Логируем каждую 100-ю строку или первые 5 строк
-                        if processed_count <= 5 or processed_count % 100 == 0:
-                            _logger.info("Обработано строк: %d/%d (строка %d: row_num=%s, object_name=%s)", 
-                                       processed_count, total_rows_to_process, row_idx, row_num, object_name)
+                    # Добавляем строку для обработки (даже если product_name пустой)
+                    rows_data.append(row_data)
+                    processed_count += 1
+                    # Логируем каждую 100-ю строку или первые 5 строк
+                    if processed_count <= 5 or processed_count % 100 == 0:
+                        _logger.info("Обработано строк: %d/%d (строка %d: row_num=%s, object_name=%s, product_name=%s)", 
+                                   processed_count, total_rows_to_process, row_idx, row_num, object_name, product_name)
                 except Exception as e:
                     error_count += 1
                     _logger.warning("ОШИБКА при парсинге строки %d: %s", row_idx, str(e))
@@ -327,8 +348,98 @@ class MrpBomImport(models.Model):
         
         return workcenter
 
+    def _parse_quantity(self, value):
+        """Парсинг количества из значения
+        
+        Преобразует значение в число. Если значение пустое или не число, возвращает None.
+        Число 0 - это валидное значение.
+        
+        Args:
+            value: Значение для парсинга
+            
+        Returns:
+            float или None: Распарсенное количество или None если значение пустое/невалидное
+        """
+        if value is None:
+            return None
+        
+        if isinstance(value, (int, float)):
+            return float(value)
+        
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+            try:
+                return float(value)
+            except (ValueError, TypeError):
+                return None
+        
+        return None
+
+    def _parse_owner_row(self, value):
+        """Парсинг номера строки владельца
+        
+        Преобразует значение в целое число, обрабатывая пустые значения.
+        
+        Args:
+            value: Значение для парсинга
+            
+        Returns:
+            int или None: Номер строки или None если значение пустое/невалидное
+        """
+        if value is None:
+            return None
+        
+        if isinstance(value, (int, float)):
+            return int(value) if value else None
+        
+        if isinstance(value, str):
+            value = value.strip()
+            if not value:
+                return None
+            try:
+                return int(float(value))  # Сначала float для обработки "8.0", потом int
+            except (ValueError, TypeError):
+                return None
+        
+        return None
+
+    def _validate_owner_relationship(self, row_data, parent_row_data):
+        """Валидация связи владельца
+        
+        Проверяет, что owner_name совпадает с названием родительской номенклатуры.
+        Для продуктов (номенклатура уровня 1) название может быть в product_name,
+        а не в object_name.
+        
+        Args:
+            row_data: Данные текущей строки
+            parent_row_data: Данные родительской строки (номенклатуры)
+            
+        Returns:
+            bool: True если валидация пройдена, False иначе
+        """
+        owner_name = str(row_data.get('owner_name', '')).strip()
+        
+        if not owner_name:
+            return False
+        
+        # Для родительской строки проверяем и object_name, и product_name
+        # (для продуктов уровня 1 название может быть в product_name)
+        parent_object_name = str(parent_row_data.get('object_name', '')).strip()
+        parent_product_name = str(parent_row_data.get('product_name', '')).strip()
+        
+        # Используем product_name если object_name пустой
+        parent_name = parent_object_name if parent_object_name else parent_product_name
+        
+        if not parent_name:
+            return False
+        
+        # Сравниваем без учета регистра и лишних пробелов
+        return owner_name.lower().strip() == parent_name.lower().strip()
+
     def process_import_data(self, rows_data, update_existing=True):
-        """Обработка импортированных данных"""
+        """Обработка импортированных данных с двухпроходной обработкой"""
         # Используем контекст для отключения mail-триггеров и других ненужных операций при импорте
         # Это значительно ускоряет массовый импорт
         # mail_create_nosubscribe - отключает автоматическую подписку на документы
@@ -354,8 +465,14 @@ class MrpBomImport(models.Model):
         
         # Словарь для хранения объектов по номеру строки
         row_objects = {}
-        # Словарь для хранения BOM по номеру строки продукта
+        # Словарь для хранения BOM по номеру строки номенклатуры
         bom_by_row = {}
+        # Словарь для хранения продуктов (номенклатуры уровня 1) по номеру строки
+        products_by_row = {}
+        # Словарь для хранения данных строк по номеру строки (для валидации владельца)
+        rows_data_by_row = {}
+        # Текущий продукт (последний встреченный продукт уровня 1)
+        current_product_row = None
         # Словарь для отслеживания созданных продуктов (для статистики)
         created_products = set()
         # Множество для отслеживания созданных рабочих центров (для статистики)
@@ -364,11 +481,6 @@ class MrpBomImport(models.Model):
         total_rows = len(rows_data)
         _logger.info("Начало обработки %d строк данных", total_rows)
         
-        # Первый проход: создание всех продуктов и BOM
-        processed = 0
-        batch_size = 100  # Размер батча для обработки - увеличен для лучшей производительности
-        flush_interval = 50  # Flush каждые 50 записей для освобождения памяти
-        commit_interval = 50  # Логируем прогресс каждые 50 записей для лучшей видимости
         # Кеш для поиска продуктов по коду 1С (чтобы избежать повторных поисков)
         product_cache = {}  # {code_1c: product}
         bom_cache = {}  # {product_tmpl_id: bom}
@@ -376,13 +488,55 @@ class MrpBomImport(models.Model):
         workcenter_cache = {}  # {workshop_name: workcenter}
         operation_cache = {}  # {(bom_id, workcenter_id, name): operation}
         
+        batch_size = 100  # Размер батча для обработки
+        flush_interval = 50  # Flush каждые 50 записей для освобождения памяти
+        commit_interval = 50  # Логируем прогресс каждые 50 записей
+        
+        # ПРОХОД 1: Определение продуктов (номенклатуры уровня 1 с заполненной колонкой 2)
+        _logger.info("---------------------------------------------------------")
+        _logger.info("ПРОХОД 1: ОПРЕДЕЛЕНИЕ ПРОДУКТОВ")
+        _logger.info("---------------------------------------------------------")
+        
+        for idx, row_data in enumerate(rows_data):
+            row_num = row_data.get('row_number')
+            if not row_num:
+                continue
+            
+            # Сохраняем данные строки для последующего использования
+            rows_data_by_row[row_num] = row_data
+            
+            object_type = str(row_data.get('object_type', '')).strip()
+            product_name = str(row_data.get('product_name', '')).strip()
+            hierarchy_level = row_data.get('hierarchy_level', '')
+            
+            # Определяем продукт: номенклатура уровня 1 с заполненной колонкой 2
+            if ('номенклатура' in object_type.lower() or 'номенклатур' in object_type.lower()):
+                try:
+                    level = int(hierarchy_level) if hierarchy_level else 0
+                    if level == 1 and product_name:
+                        # Это новый продукт
+                        current_product_row = row_num
+                        products_by_row[row_num] = row_data
+                        _logger.info("Найден продукт (строка %d): %s", row_num, product_name)
+                except (ValueError, TypeError):
+                    pass
+        
+        _logger.info("Найдено продуктов: %d", len(products_by_row))
+        
+        # ПРОХОД 2: Обработка всех объектов
+        _logger.info("---------------------------------------------------------")
+        _logger.info("ПРОХОД 2: ОБРАБОТКА ОБЪЕКТОВ")
+        _logger.info("---------------------------------------------------------")
+        
+        current_product_row = None  # Сбрасываем для второго прохода
+        
         try:
             for idx, row_data in enumerate(rows_data):
                 # Обработка батчами для освобождения ресурсов
                 if idx > 0 and idx % batch_size == 0:
                     # Завершаем предыдущий батч
                     self.env.cr.flush()
-                    # Очищаем кеш ORM для освобождения памяти (только для моделей, которые мы используем)
+                    # Очищаем кеш ORM для освобождения памяти
                     self.env.registry.clear_cache()
                 
                 # Частые flush'ы для освобождения памяти и предотвращения таймаутов
@@ -402,7 +556,6 @@ class MrpBomImport(models.Model):
                 
                 # Логирование прогресса
                 if idx > 0 and idx % commit_interval == 0:
-                    processed = idx
                     progress = (idx / total_rows) * 100
                     _logger.info("Обработано: %d/%d (%.1f%%)", idx, total_rows, progress)
                 
@@ -410,10 +563,20 @@ class MrpBomImport(models.Model):
                 if not row_num:
                     continue
                 
+                # Определяем текущий продукт (последний встреченный продукт)
+                if row_num in products_by_row:
+                    current_product_row = row_num
+                
                 try:
                     object_type = str(row_data.get('object_type', '')).strip()
-                    object_name = str(row_data.get('object_name', '')).strip() or str(row_data.get('product_name', '')).strip()
+                    object_name = str(row_data.get('object_name', '')).strip()
+                    product_name = str(row_data.get('product_name', '')).strip()
                     code_1c = row_data.get('code_1c', '')
+                    hierarchy_level = row_data.get('hierarchy_level', '')
+                    
+                    # Если нет object_name, используем product_name как резерв
+                    if not object_name:
+                        object_name = product_name
                     
                     if not object_name:
                         continue
@@ -470,16 +633,33 @@ class MrpBomImport(models.Model):
                                 product.product_tmpl_id.route_ids = [(4, manufacture_route.id)]
                         
                         # Проверка: если номенклатура является компонентом другого изделия (подсборка)
-                        owner_row = row_data.get('owner_row_number', 0)
+                        owner_row = self._parse_owner_row(row_data.get('owner_row_number'))
                         if owner_row and owner_row in bom_by_row:
+                            # Валидация владельца: проверяем совпадение owner_name с названием родительской номенклатуры
+                            parent_row_data = rows_data_by_row.get(owner_row)
+                            if not parent_row_data:
+                                error_msg = _("Row %s: Parent row %s not found for validation") % (row_num, owner_row)
+                                _logger.warning(error_msg)
+                                stats['errors'].append(error_msg)
+                                continue
+                            
+                            if not self._validate_owner_relationship(row_data, parent_row_data):
+                                error_msg = _("Row %s: Owner name validation failed. Expected '%s', got '%s'") % (
+                                    row_num, parent_row_data.get('object_name', ''), row_data.get('owner_name', ''))
+                                _logger.warning(error_msg)
+                                stats['errors'].append(error_msg)
+                                continue
+                            
                             parent_bom = bom_by_row[owner_row]
                             
-                            # Количество
-                            qty = row_data.get('norm_per_product') or row_data.get('qty_per_detail') or 1.0
-                            try:
-                                qty = float(qty) if qty else 1.0
-                            except (ValueError, TypeError):
-                                qty = 1.0
+                            # Количество для номенклатур берется из колонки 8 (qty_per_detail)
+                            qty = self._parse_quantity(row_data.get('qty_per_detail'))
+                            if qty is None:
+                                _logger.warning("Row %s: Nomenclature '%s' has empty quantity, skipping BOM line", 
+                                              row_num, object_name)
+                                continue
+                            _logger.debug("Row %s: Nomenclature '%s' quantity parsed: %s (raw: %s)", 
+                                        row_num, object_name, qty, row_data.get('qty_per_detail'))
                             
                             # Единица измерения
                             uom_name = row_data.get('uom', '')
@@ -505,16 +685,35 @@ class MrpBomImport(models.Model):
                                 })
                                 bom_line_cache[bom_line_key] = bom_line
                                 stats['bom_lines_created'] += 1
+                                _logger.info("Row %s: Created BOM line for '%s' in parent BOM (row %s), qty=%s", 
+                                           row_num, object_name, owner_row, qty)
                             elif update_existing:
                                 bom_line.write({
                                     'product_qty': qty,
                                     'product_uom_id': uom.id,
                                 })
+                                _logger.debug("Row %s: Updated BOM line for '%s' in parent BOM (row %s), qty=%s", 
+                                            row_num, object_name, owner_row, qty)
                     
                     # Обработка материалов
                     elif 'материал' in object_type.lower():
-                        owner_row = row_data.get('owner_row_number', 0)
+                        owner_row = self._parse_owner_row(row_data.get('owner_row_number'))
                         if owner_row and owner_row in bom_by_row:
+                            # Валидация владельца: проверяем совпадение owner_name с названием родительской номенклатуры
+                            parent_row_data = rows_data_by_row.get(owner_row)
+                            if not parent_row_data:
+                                error_msg = _("Row %s: Parent row %s not found for material validation") % (row_num, owner_row)
+                                _logger.warning(error_msg)
+                                stats['errors'].append(error_msg)
+                                continue
+                            
+                            if not self._validate_owner_relationship(row_data, parent_row_data):
+                                error_msg = _("Row %s: Owner name validation failed for material. Expected '%s', got '%s'") % (
+                                    row_num, parent_row_data.get('object_name', ''), row_data.get('owner_name', ''))
+                                _logger.warning(error_msg)
+                                stats['errors'].append(error_msg)
+                                continue
+                            
                             bom = bom_by_row[owner_row]
                             
                             # Создание продукта-материала
@@ -525,12 +724,14 @@ class MrpBomImport(models.Model):
                             else:
                                 stats['products_updated'] += 1
                             
-                            # Количество
-                            qty = row_data.get('norm_per_product') or row_data.get('qty_per_detail') or 1.0
-                            try:
-                                qty = float(qty) if qty else 1.0
-                            except (ValueError, TypeError):
-                                qty = 1.0
+                            # Количество для материалов берется из колонки 9 (norm_per_product)
+                            qty = self._parse_quantity(row_data.get('norm_per_product'))
+                            if qty is None:
+                                _logger.warning("Row %s: Material '%s' has empty quantity, skipping BOM line", 
+                                              row_num, object_name)
+                                continue
+                            _logger.debug("Row %s: Material '%s' quantity parsed: %s (raw: %s)", 
+                                        row_num, object_name, qty, row_data.get('norm_per_product'))
                             
                             # Единица измерения
                             uom_name = row_data.get('uom', '')
@@ -556,18 +757,37 @@ class MrpBomImport(models.Model):
                                 })
                                 bom_line_cache[bom_line_key] = bom_line
                                 stats['bom_lines_created'] += 1
+                                _logger.info("Row %s: Created BOM line for material '%s' in parent BOM (row %s), qty=%s", 
+                                           row_num, object_name, owner_row, qty)
                             elif update_existing:
                                 bom_line.write({
                                     'product_qty': qty,
                                     'product_uom_id': uom.id,
                                 })
+                                _logger.debug("Row %s: Updated BOM line for material '%s' in parent BOM (row %s), qty=%s", 
+                                            row_num, object_name, owner_row, qty)
                             
                             row_objects[row_num] = material_product
                     
                     # Обработка операций
                     elif 'операция' in object_type.lower() or 'операци' in object_type.lower():
-                        owner_row = row_data.get('owner_row_number', 0)
+                        owner_row = self._parse_owner_row(row_data.get('owner_row_number'))
                         if owner_row and owner_row in bom_by_row:
+                            # Валидация владельца: проверяем совпадение owner_name с названием родительской номенклатуры
+                            parent_row_data = rows_data_by_row.get(owner_row)
+                            if not parent_row_data:
+                                error_msg = _("Row %s: Parent row %s not found for operation validation") % (row_num, owner_row)
+                                _logger.warning(error_msg)
+                                stats['errors'].append(error_msg)
+                                continue
+                            
+                            if not self._validate_owner_relationship(row_data, parent_row_data):
+                                error_msg = _("Row %s: Owner name validation failed for operation. Expected '%s', got '%s'") % (
+                                    row_num, parent_row_data.get('object_name', ''), row_data.get('owner_name', ''))
+                                _logger.warning(error_msg)
+                                stats['errors'].append(error_msg)
+                                continue
+                            
                             bom = bom_by_row[owner_row]
                             
                             # Рабочий центр
@@ -579,12 +799,14 @@ class MrpBomImport(models.Model):
                                     created_workcenters.add(workcenter.id)
                                     stats['workcenters_created'] += 1
                                 
-                                # Длительность операции (из нормы на изделие или количества)
-                                duration = row_data.get('norm_per_product') or row_data.get('qty_per_detail') or 60.0
-                                try:
-                                    duration = float(duration) if duration else 60.0
-                                except (ValueError, TypeError):
+                                # Длительность операции для операций берется из колонки 9 (norm_per_product)
+                                duration = self._parse_quantity(row_data.get('norm_per_product'))
+                                if duration is None:
+                                    _logger.warning("Row %s: Operation '%s' has empty duration, using default 60.0", 
+                                                  row_num, object_name)
                                     duration = 60.0
+                                _logger.debug("Row %s: Operation '%s' duration parsed: %s (raw: %s)", 
+                                            row_num, object_name, duration, row_data.get('norm_per_product'))
                                 
                                 # Проверка существования операции с использованием кеша
                                 operation_key = (bom.id, workcenter.id, object_name)
@@ -608,10 +830,14 @@ class MrpBomImport(models.Model):
                                     })
                                     operation_cache[operation_key] = operation
                                     stats['operations_created'] += 1
+                                    _logger.info("Row %s: Created operation '%s' in parent BOM (row %s), duration=%s", 
+                                               row_num, object_name, owner_row, duration)
                                 elif update_existing:
                                     operation.write({
                                         'time_cycle_manual': duration,
                                     })
+                                    _logger.debug("Row %s: Updated operation '%s' in parent BOM (row %s), duration=%s", 
+                                                row_num, object_name, owner_row, duration)
                                 
                                 row_objects[row_num] = workcenter
                 
