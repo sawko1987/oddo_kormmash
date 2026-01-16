@@ -1,0 +1,68 @@
+# Правила для Cursor AI
+
+## Ограничение размера файлов
+
+**ВАЖНО:** Для оптимизации расходов на использование AI, все файлы, участвующие в парсинге и обработке данных, должны быть разбиты на модули размером не более 3500 токенов каждый.
+
+### Принципы разбиения:
+
+1. **Разделение по функциональности:**
+   - Парсинг данных → отдельный модуль (parser)
+   - Вспомогательные методы → отдельный модуль (helpers)
+   - Обработка данных → отдельный модуль (processor)
+   - Основной класс → минимальный файл, использующий миксины
+
+2. **Использование миксинов:**
+   - Создавайте AbstractModel миксины для переиспользования кода
+   - Основной класс наследуется от миксинов через `_inherit`
+
+3. **Структура файлов:**
+   ```
+   models/
+   ├── module_name_parser.py      # Парсинг (до 3500 токенов)
+   ├── module_name_helpers.py     # Вспомогательные методы (до 3500 токенов)
+   ├── module_name_processor.py   # Обработка данных (до 3500 токенов)
+   └── module_name.py             # Основной класс (минимальный, использует миксины)
+   ```
+
+4. **Проверка размера:**
+   - Перед созданием нового файла проверяйте его размер
+   - Если файл превышает 3500 токенов, разбейте его на части
+
+### Пример правильной структуры:
+
+```python
+# mrp_bom_import_parser.py - парсинг XLS
+class XlsParserMixin(models.AbstractModel):
+    _name = 'mrp.bom.import.parser.mixin'
+    def parse_xls_file(self, file_data):
+        # ... логика парсинга
+
+# mrp_bom_import_helpers.py - вспомогательные методы
+class ImportHelpersMixin(models.AbstractModel):
+    _name = 'mrp.bom.import.helpers.mixin'
+    def get_or_create_product(self, ...):
+        # ... логика создания продуктов
+
+# mrp_bom_import_processor.py - обработка данных
+class ImportProcessorMixin(models.AbstractModel):
+    _name = 'mrp.bom.import.processor.mixin'
+    def process_import_data(self, rows_data, ...):
+        # ... логика обработки
+
+# mrp_bom_import.py - основной класс
+class MrpBomImport(models.Model):
+    _name = 'mrp.bom.import'
+    _inherit = [
+        'mrp.bom.import.parser.mixin',
+        'mrp.bom.import.helpers.mixin',
+        'mrp.bom.import.processor.mixin',
+    ]
+```
+
+### Преимущества:
+
+- ✅ Снижение расходов на AI (меньше токенов на файл)
+- ✅ Улучшенная читаемость кода
+- ✅ Легче поддерживать и тестировать
+- ✅ Переиспользование кода через миксины
