@@ -22,6 +22,36 @@ class ImportProcessorMixin(models.AbstractModel):
             tracking_disable=True
         )
         
+        # ДЕТАЛЬНАЯ ПРОВЕРКА ПРАВ ПОЛЬЗОВАТЕЛЯ
+        _logger.info("=" * 80)
+        _logger.info("НАЧАЛО ИМПОРТА - ИНФОРМАЦИЯ О ПОЛЬЗОВАТЕЛЕ:")
+        _logger.info("  Пользователь: '%s' (ID: %s)", self.env.user.name, self.env.user.id)
+        _logger.info("  Компания: '%s' (ID: %s)", self.env.company.name, self.env.company.id)
+        
+        # Проверка группы для отображения операций
+        has_routing_group = self.env.user.has_group('mrp.group_mrp_routings')
+        _logger.info("  Группа 'mrp.group_mrp_routings': %s", "✅ ЕСТЬ" if has_routing_group else "❌ НЕТ")
+        
+        if not has_routing_group:
+            _logger.error(
+                "  ⚠️  КРИТИЧЕСКОЕ ПРЕДУПРЕЖДЕНИЕ: Пользователь не имеет группы 'mrp.group_mrp_routings'. "
+                "Вкладка 'Операции' НЕ БУДЕТ ОТОБРАЖАТЬСЯ в интерфейсе BOM, даже если операции созданы!"
+            )
+            _logger.error(
+                "  Для исправления: Settings > Users & Companies > Users > выбрать пользователя > "
+                "Access Rights > добавить группу 'Manage Work Order Operations'"
+            )
+        else:
+            _logger.info("  ✅ Вкладка 'Операции' будет видна в интерфейсе BOM")
+        
+        # Проверка других связанных групп
+        has_mrp_user = self.env.user.has_group('mrp.group_mrp_user')
+        has_mrp_manager = self.env.user.has_group('mrp.group_mrp_manager')
+        _logger.info("  Группа 'mrp.group_mrp_user': %s", "✅ ЕСТЬ" if has_mrp_user else "❌ НЕТ")
+        _logger.info("  Группа 'mrp.group_mrp_manager': %s", "✅ ЕСТЬ" if has_mrp_manager else "❌ НЕТ")
+        
+        _logger.info("=" * 80)
+        
         stats = {
             'products_created': 0,
             'products_updated': 0,
@@ -52,6 +82,7 @@ class ImportProcessorMixin(models.AbstractModel):
         bom_line_cache = {}
         workcenter_cache = {}
         operation_cache = {}
+        bom_operation_counters = {}  # {bom_id: текущий_sequence}
         
         batch_size = 100
         flush_interval = 50
@@ -94,7 +125,7 @@ class ImportProcessorMixin(models.AbstractModel):
                         rows_data_by_row, stats, product_cache, bom_cache,
                         bom_line_cache, workcenter_cache, operation_cache,
                         row_objects, created_products, created_workcenters,
-                        update_existing, nomenclature_rows  # Передаем nomenclature_rows
+                        update_existing, nomenclature_rows, bom_operation_counters  # Передаем bom_operation_counters
                     )
                 except KeyboardInterrupt:
                     _logger.warning("Обработка прервана пользователем (Ctrl+C) на строке %d", row_num)
@@ -125,6 +156,185 @@ class ImportProcessorMixin(models.AbstractModel):
                               stats['skipped_invalid_owner'])
         except Exception as e:
             _logger.error("Ошибка при финальном сохранении: %s", str(e))
+        
+        # Инвалидация кеша operation_ids для всех BOM с операциями
+        # Это необходимо, так как ORM не всегда автоматически обновляет кеш One2many
+        # при массовом создании записей через create()
+        if bom_operation_counters:
+            try:
+                _logger.info("=" * 80)
+                _logger.info("ИНВАЛИДАЦИЯ КЕША operation_ids - НАЧАЛО")
+                _logger.info("  Всего BOM с операциями: %d", len(bom_operation_counters))
+                _logger.info("  BOM IDs: %s", list(bom_operation_counters.keys()))
+                _logger.info("=" * 80)
+                
+                boms_with_operations = self.env['mrp.bom'].browse(list(bom_operation_counters.keys()))
+                boms_with_operations.invalidate_recordset(['operation_ids'])
+                _logger.info("✅ Инвалидирован кеш operation_ids для %d BOM", len(boms_with_operations))
+                
+                # ДЕТАЛЬНАЯ ПРОВЕРКА ПОСЛЕ ИНВАЛИДАЦИИ
+                _logger.info("=" * 80)
+                _logger.info("ДЕТАЛЬНАЯ ПРОВЕРКА ПОСЛЕ ИНВАЛИДАЦИИ КЕША:")
+                _logger.info("=" * 80)
+                
+                for bom in boms_with_operations:
+                    _logger.info("-" * 80)
+                    _logger.info("BOM ID: %s", bom.id)
+                    _logger.info("  Продукт: '%s' (ID: %s)", bom.product_tmpl_id.name, bom.product_tmpl_id.id)
+                    _logger.info("  Тип BOM: '%s'", bom.type)
+                    _logger.info("  Тип BOM правильный для операций? %s", 
+                               "✅ ДА" if bom.type in ('normal', 'phantom') else "❌ НЕТ (должен быть 'normal' или 'phantom')")
+                    
+                    # Проверка группы пользователя
+                    has_group = self.env.user.has_group('mrp.group_mrp_routings')
+                    _logger.info("  Группа 'mrp.group_mrp_routings' у пользователя '%s': %s", 
+                               self.env.user.name, "✅ ЕСТЬ" if has_group else "❌ НЕТ")
+                    
+                    # Ожидаемое количество операций
+                    expected_count = bom_operation_counters.get(bom.id, 0) - 1  # -1 потому что счетчик уже увеличен
+                    _logger.info("  Ожидаемое количество операций: %d", expected_count)
+                    
+                    # Фактическое количество через operation_ids
+                    operation_count = len(bom.operation_ids)
+                    _logger.info("  Фактическое количество в bom.operation_ids: %d", operation_count)
+                    
+                    # Проверка напрямую в БД
+                    direct_ops = self.env['mrp.routing.workcenter'].search([
+                        ('bom_id', '=', bom.id)
+                    ])
+                    direct_count = len(direct_ops)
+                    _logger.info("  Количество операций в БД (прямой поиск): %d", direct_count)
+                    
+                    if direct_count > 0:
+                        _logger.info("  ID операций в БД: %s", [op.id for op in direct_ops])
+                        _logger.info("  Имена операций в БД: %s", [op.name for op in direct_ops])
+                        _logger.info("  Workcenters в БД: %s", [op.workcenter_id.name for op in direct_ops])
+                    
+                    # Сравнение результатов
+                    if operation_count == 0 and direct_count > 0:
+                        _logger.error("  ❌ ПРОБЛЕМА: В БД есть %d операций, но bom.operation_ids пусто!", direct_count)
+                        _logger.error("     Это означает, что кеш не обновился после инвалидации!")
+                    elif operation_count != expected_count:
+                        _logger.warning("  ⚠️  Несоответствие: ожидалось %d, в operation_ids: %d, в БД: %d", 
+                                      expected_count, operation_count, direct_count)
+                    elif operation_count == expected_count and direct_count == expected_count:
+                        _logger.info("  ✅ ВСЕ ПРАВИЛЬНО: %d операций в operation_ids и в БД", operation_count)
+                    
+                    # Дополнительная проверка: попробуем перечитать BOM из БД
+                    bom_fresh = self.env['mrp.bom'].browse(bom.id)
+                    fresh_count = len(bom_fresh.operation_ids)
+                    _logger.info("  Количество операций после перечитывания BOM: %d", fresh_count)
+                    if fresh_count != operation_count:
+                        _logger.warning("  ⚠️  Разница между кешированным и перечитанным BOM: %d vs %d", 
+                                      operation_count, fresh_count)
+                    
+                    _logger.info("-" * 80)
+                
+                _logger.info("=" * 80)
+                _logger.info("ИНВАЛИДАЦИЯ КЕША operation_ids - ЗАВЕРШЕНО")
+                _logger.info("=" * 80)
+                
+            except Exception as e:
+                _logger.error("=" * 80)
+                _logger.error("ОШИБКА при инвалидации кеша operation_ids:")
+                _logger.error("  Тип ошибки: %s", type(e).__name__)
+                _logger.error("  Сообщение: %s", str(e))
+                import traceback
+                _logger.error("  Трассировка:\n%s", traceback.format_exc())
+                _logger.error("=" * 80)
+        
+        # ДОПОЛНИТЕЛЬНАЯ ПРОВЕРКА: Все BOM, которые обрабатывались, и их операции
+        _logger.info("=" * 80)
+        _logger.info("ПРОВЕРКА ВСЕХ BOM, КОТОРЫЕ ОБРАБАТЫВАЛИСЬ:")
+        _logger.info("=" * 80)
+        
+        # Собираем все уникальные BOM из bom_by_row
+        all_boms = {}
+        for row_num, bom in bom_by_row.items():
+            if bom.id not in all_boms:
+                all_boms[bom.id] = bom
+        
+        if all_boms:
+            _logger.info("Всего уникальных BOM обработано: %d", len(all_boms))
+            for bom_id, bom in all_boms.items():
+                _logger.info("-" * 80)
+                _logger.info("BOM ID: %s", bom_id)
+                _logger.info("  Продукт: '%s' (ID: %s)", bom.product_tmpl_id.name, bom.product_tmpl_id.id)
+                _logger.info("  Тип BOM: '%s'", bom.type)
+                _logger.info("  Тип правильный для операций? %s", 
+                           "✅ ДА" if bom.type in ('normal', 'phantom') else "❌ НЕТ")
+                
+                # Проверка операций в БД
+                all_ops = self.env['mrp.routing.workcenter'].search([
+                    ('bom_id', '=', bom_id)
+                ])
+                _logger.info("  Всего операций в БД для этого BOM: %d", len(all_ops))
+                if len(all_ops) > 0:
+                    _logger.info("  Операции в БД:")
+                    for op in all_ops:
+                        _logger.info("    - ID: %s, имя: '%s', workcenter: '%s' (ID: %s), active: %s, sequence: %s",
+                                   op.id, op.name, op.workcenter_id.name, op.workcenter_id.id, op.active, op.sequence)
+                
+                # Проверка через operation_ids
+                ops_via_relation = len(bom.operation_ids)
+                _logger.info("  Операций через bom.operation_ids: %d", ops_via_relation)
+                if ops_via_relation != len(all_ops):
+                    _logger.error("  ❌ РАСХОЖДЕНИЕ! В БД: %d, через relation: %d", len(all_ops), ops_via_relation)
+                else:
+                    _logger.info("  ✅ Количество совпадает")
+                
+                # Проверка группы пользователя
+                has_group = self.env.user.has_group('mrp.group_mrp_routings')
+                _logger.info("  Группа 'mrp.group_mrp_routings': %s", "✅ ЕСТЬ" if has_group else "❌ НЕТ")
+                
+                if len(all_ops) > 0 and bom.type in ('normal', 'phantom') and has_group:
+                    _logger.info("  ✅ ВСЕ УСЛОВИЯ ВЫПОЛНЕНЫ - вкладка 'Операции' ДОЛЖНА быть видна!")
+                elif len(all_ops) > 0:
+                    _logger.warning("  ⚠️  Операции есть, но вкладка может быть не видна:")
+                    if bom.type not in ('normal', 'phantom'):
+                        _logger.warning("     - Тип BOM неправильный: '%s' (должен быть 'normal' или 'phantom')", bom.type)
+                    if not has_group:
+                        _logger.warning("     - У пользователя нет группы 'mrp.group_mrp_routings'")
+                else:
+                    _logger.info("  ℹ️  Операций нет в этом BOM")
+                _logger.info("-" * 80)
+        else:
+            _logger.warning("  ⚠️  Нет обработанных BOM для проверки")
+        
+        _logger.info("=" * 80)
+        
+        # ФИНАЛЬНОЕ РЕЗЮМЕ ИМПОРТА
+        _logger.info("=" * 80)
+        _logger.info("ФИНАЛЬНОЕ РЕЗЮМЕ ИМПОРТА:")
+        _logger.info("  Всего обработано строк: %d", total_rows)
+        _logger.info("  Создано продуктов: %d", stats['products_created'])
+        _logger.info("  Создано BOM: %d", stats['boms_created'])
+        _logger.info("  Создано операций: %d", stats['operations_created'])
+        _logger.info("  Создано рабочих центров: %d", stats['workcenters_created'])
+        _logger.info("  BOM с операциями: %d", len(bom_operation_counters))
+        
+        if stats['operations_created'] > 0:
+            _logger.info("")
+            _logger.info("  ⚠️  ВАЖНО: Проверьте логи выше для каждого BOM:")
+            _logger.info("     - Правильный ли тип BOM ('normal' или 'phantom')")
+            _logger.info("     - Есть ли у пользователя группа 'mrp.group_mrp_routings'")
+            _logger.info("     - Сколько операций в operation_ids после инвалидации кеша")
+            _logger.info("     - Сколько операций в БД (прямой поиск)")
+            _logger.info("")
+            _logger.info("  Если операции не отображаются в интерфейсе:")
+            _logger.info("     1. Проверьте, что у пользователя есть группа 'Manage Work Order Operations'")
+            _logger.info("     2. Проверьте, что тип BOM = 'normal' или 'phantom'")
+            _logger.info("     3. Перезагрузите страницу BOM (F5)")
+            _logger.info("     4. Проверьте логи выше на наличие ошибок")
+        
+        if stats['errors']:
+            _logger.warning("  Ошибок во время импорта: %d", len(stats['errors']))
+            for error in stats['errors'][:10]:  # Показываем первые 10 ошибок
+                _logger.warning("    - %s", error)
+            if len(stats['errors']) > 10:
+                _logger.warning("    ... и еще %d ошибок", len(stats['errors']) - 10)
+        
+        _logger.info("=" * 80)
         
         return stats
 
@@ -299,7 +509,7 @@ class ImportProcessorMixin(models.AbstractModel):
                     rows_data_by_row, stats, product_cache, bom_cache,
                     bom_line_cache, workcenter_cache, operation_cache,
                     row_objects, created_products, created_workcenters,
-                    update_existing, nomenclature_rows):
+                    update_existing, nomenclature_rows, bom_operation_counters):
         """Обработка одной строки данных"""
         object_type = str(row_data.get('object_type', '')).strip()
         object_name = str(row_data.get('object_name', '')).strip()
@@ -335,7 +545,7 @@ class ImportProcessorMixin(models.AbstractModel):
             self._process_operation(
                 row_data, row_num, object_name, bom_by_row, rows_data_by_row,
                 stats, workcenter_cache, operation_cache, row_objects,
-                created_workcenters, update_existing, nomenclature_rows  # Передаем nomenclature_rows
+                created_workcenters, update_existing, nomenclature_rows, bom_operation_counters  # Передаем bom_operation_counters
             )
 
     def _process_nomenclature(self, row_data, row_num, object_name, code_1c,
@@ -377,9 +587,19 @@ class ImportProcessorMixin(models.AbstractModel):
                 })
                 stats['boms_created'] += 1
             else:
+                # Убеждаемся, что тип BOM правильный для отображения операций
+                if bom.type not in ('normal', 'phantom'):
+                    bom.write({'type': 'normal'})
+                    _logger.info("Обновлен тип BOM для продукта '%s' с '%s' на 'normal' для отображения операций", 
+                               object_name, bom.type)
                 stats['boms_updated'] += 1
             bom_cache[product_tmpl_id] = bom
         else:
+            # Убеждаемся, что тип BOM правильный для отображения операций
+            if bom.type not in ('normal', 'phantom'):
+                bom.write({'type': 'normal'})
+                _logger.info("Обновлен тип BOM для продукта '%s' с '%s' на 'normal' для отображения операций", 
+                           object_name, bom.type)
             stats['boms_updated'] += 1
         
         row_objects[row_num] = product
@@ -492,7 +712,7 @@ class ImportProcessorMixin(models.AbstractModel):
     def _process_operation(self, row_data, row_num, object_name, bom_by_row,
                           rows_data_by_row, stats, workcenter_cache,
                           operation_cache, row_objects, created_workcenters,
-                          update_existing, nomenclature_rows):
+                          update_existing, nomenclature_rows, bom_operation_counters):
         """Обработка операции"""
         owner_row = self._parse_owner_row(row_data.get('owner_row_number'))
         
@@ -534,9 +754,27 @@ class ImportProcessorMixin(models.AbstractModel):
         
         bom = bom_by_row[owner_row]
         
+        # ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ BOM ПЕРЕД ОБРАБОТКОЙ ОПЕРАЦИИ
+        _logger.info("=" * 80)
+        _logger.info("ОБРАБОТКА ОПЕРАЦИИ - ИНФОРМАЦИЯ О BOM:")
+        _logger.info("  Строка операции: %s", row_num)
+        _logger.info("  Имя операции: '%s'", object_name)
+        _logger.info("  BOM ID: %s", bom.id)
+        _logger.info("  BOM тип: '%s'", bom.type)
+        _logger.info("  BOM активен: %s", bom.active)
+        _logger.info("  BOM продукт: '%s' (ID: %s)", bom.product_tmpl_id.name, bom.product_tmpl_id.id)
+        _logger.info("  BOM количество: %s", bom.product_qty)
+        _logger.info("  Текущее количество операций в BOM: %d", len(bom.operation_ids))
+        if len(bom.operation_ids) > 0:
+            _logger.info("  Существующие операции: %s", [op.name for op in bom.operation_ids])
+        _logger.info("=" * 80)
+        
         # Рабочий центр (теперь всегда возвращает валидный цех, даже если не указан)
         workshop = row_data.get('workshop', '')
         workcenter = self.get_or_create_workcenter(workshop, workcenter_cache)
+        
+        _logger.info("  Workcenter ID: %s, имя: '%s'", workcenter.id if workcenter else None, 
+                    workcenter.name if workcenter else None)
         
         # workcenter теперь всегда валиден (возвращается дефолтный "Не указан" если пустой)
         if workcenter and workcenter.id not in created_workcenters:
@@ -552,27 +790,131 @@ class ImportProcessorMixin(models.AbstractModel):
         # Проверка существования операции
         operation_key = (bom.id, workcenter.id, object_name)
         operation = operation_cache.get(operation_key)
+        
+        _logger.info("  Проверка существования операции:")
+        _logger.info("    Ключ кеша: (bom_id=%s, workcenter_id=%s, name='%s')", 
+                    bom.id, workcenter.id, object_name)
+        _logger.info("    Найдено в кеше: %s", "ДА" if operation else "НЕТ")
+        
         if not operation:
+            _logger.info("    Поиск в БД...")
             operation = self.env['mrp.routing.workcenter'].search([
                 ('bom_id', '=', bom.id),
                 ('workcenter_id', '=', workcenter.id),
                 ('name', '=', object_name)
             ], limit=1)
             if operation:
+                _logger.info("    ✅ Операция найдена в БД (ID: %s)", operation.id)
+                _logger.info("       bom_id: %s, workcenter_id: %s, name: '%s'", 
+                           operation.bom_id.id, operation.workcenter_id.id, operation.name)
+                _logger.info("       active: %s, sequence: %s", operation.active, operation.sequence)
                 operation_cache[operation_key] = operation
+            else:
+                _logger.info("    ❌ Операция НЕ найдена в БД - будет создана новая")
+                
+                # Дополнительная проверка: может быть операция с таким именем, но другим workcenter?
+                ops_with_same_name = self.env['mrp.routing.workcenter'].search([
+                    ('bom_id', '=', bom.id),
+                    ('name', '=', object_name)
+                ])
+                if ops_with_same_name:
+                    _logger.warning("    ⚠️  Найдены операции с таким же именем, но другим workcenter:")
+                    for op in ops_with_same_name:
+                        _logger.warning("       ID: %s, workcenter: '%s' (ID: %s), bom_id: %s", 
+                                      op.id, op.workcenter_id.name, op.workcenter_id.id, op.bom_id.id)
+        
+        # ЛОГИРОВАНИЕ РЕЗУЛЬТАТА ПРОВЕРКИ
+        if operation:
+            _logger.info("=" * 80)
+            _logger.info("ОПЕРАЦИЯ УЖЕ СУЩЕСТВУЕТ - ПРОПУСК СОЗДАНИЯ:")
+            _logger.info("  Operation ID: %s", operation.id)
+            _logger.info("  Operation name: '%s'", operation.name)
+            _logger.info("  Operation bom_id: %s", operation.bom_id.id)
+            _logger.info("  Operation workcenter_id: %s", operation.workcenter_id.id)
+            _logger.info("  Operation active: %s", operation.active)
+            _logger.info("  Operation sequence: %s", operation.sequence)
+            _logger.info("  ⚠️  Операция найдена, новая НЕ создается")
+            if update_existing:
+                _logger.info("  Обновление существующей операции...")
+            _logger.info("=" * 80)
         
         if not operation:
+            # Получить текущий sequence для этого BOM из локального счетчика
+            current_sequence = bom_operation_counters.get(bom.id, 1)
+            
+            # ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ПЕРЕД СОЗДАНИЕМ
+            _logger.info("=" * 80)
+            _logger.info("СОЗДАНИЕ ОПЕРАЦИИ - ДЕТАЛЬНАЯ ИНФОРМАЦИЯ:")
+            _logger.info("  Строка: %s", row_num)
+            _logger.info("  Имя операции: '%s'", object_name)
+            _logger.info("  BOM ID: %s", bom.id)
+            _logger.info("  BOM тип: '%s'", bom.type)
+            _logger.info("  BOM продукт: '%s' (ID: %s)", bom.product_tmpl_id.name, bom.product_tmpl_id.id)
+            _logger.info("  Workcenter ID: %s", workcenter.id)
+            _logger.info("  Workcenter имя: '%s'", workcenter.name)
+            _logger.info("  Длительность: %s", duration)
+            _logger.info("  Sequence: %s", current_sequence)
+            _logger.info("  Текущее количество операций в BOM (до создания): %d", len(bom.operation_ids))
+            _logger.info("=" * 80)
+            
             operation = self.env['mrp.routing.workcenter'].create({
                 'bom_id': bom.id,
                 'workcenter_id': workcenter.id,
                 'name': object_name,
                 'time_cycle_manual': duration,
-                'sequence': len(bom.operation_ids) + 1,
+                'sequence': current_sequence,
+                'active': True,
             })
+            
+            # ДЕТАЛЬНОЕ ЛОГИРОВАНИЕ ПОСЛЕ СОЗДАНИЯ
+            _logger.info("=" * 80)
+            _logger.info("ОПЕРАЦИЯ СОЗДАНА - ПРОВЕРКА:")
+            _logger.info("  Operation ID: %s", operation.id)
+            _logger.info("  Operation bom_id: %s", operation.bom_id.id)
+            _logger.info("  Operation workcenter_id: %s", operation.workcenter_id.id)
+            _logger.info("  Operation name: '%s'", operation.name)
+            _logger.info("  Operation active: %s", operation.active)
+            _logger.info("  Operation sequence: %s", operation.sequence)
+            
+            # Проверка связи с BOM
+            if operation.bom_id.id != bom.id:
+                _logger.error("  ❌ ОШИБКА: Операция не связана с правильным BOM!")
+                _logger.error("     Ожидался BOM ID: %s, получен: %s", bom.id, operation.bom_id.id)
+            else:
+                _logger.info("  ✅ Операция правильно связана с BOM")
+            
+            # Проверка в базе данных напрямую
+            direct_check = self.env['mrp.routing.workcenter'].search([
+                ('id', '=', operation.id)
+            ])
+            if direct_check:
+                _logger.info("  ✅ Операция найдена в БД напрямую (ID: %s)", direct_check.id)
+                _logger.info("     bom_id в БД: %s", direct_check.bom_id.id)
+            else:
+                _logger.error("  ❌ ОПЕРАЦИЯ НЕ НАЙДЕНА В БД!")
+            
+            # Проверка через BOM.operation_ids (может быть закэшировано)
+            bom_ops_count = len(bom.operation_ids)
+            _logger.info("  Количество операций в bom.operation_ids (после создания): %d", bom_ops_count)
+            if bom_ops_count == 0:
+                _logger.warning("  ⚠️  ВНИМАНИЕ: bom.operation_ids пусто! Кеш не обновлен.")
+            else:
+                operation_ids_list = [op.id for op in bom.operation_ids]
+                _logger.info("  ID операций в bom.operation_ids: %s", operation_ids_list)
+                if operation.id in operation_ids_list:
+                    _logger.info("  ✅ Новая операция присутствует в bom.operation_ids")
+                else:
+                    _logger.warning("  ⚠️  Новая операция НЕ присутствует в bom.operation_ids (кеш не обновлен)")
+            
+            _logger.info("=" * 80)
+            
+            # Увеличить счетчик для следующей операции этого BOM
+            bom_operation_counters[bom.id] = current_sequence + 1
+            
             operation_cache[operation_key] = operation
             stats['operations_created'] += 1
-            _logger.info("Row %s: Created operation '%s' in parent BOM (row %s), duration=%s", 
-                       row_num, object_name, owner_row, duration)
+            _logger.info("Row %s: Created operation '%s' in parent BOM (row %s), duration=%s, sequence=%s", 
+                       row_num, object_name, owner_row, duration, current_sequence)
         elif update_existing:
             operation.write({
                 'time_cycle_manual': duration,
