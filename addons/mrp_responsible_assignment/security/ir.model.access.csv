@@ -1,0 +1,4 @@
+id,name,model_id:id,group_id:id,perm_read,perm_write,perm_create,perm_unlink
+access_mrp_workorder_failure_reason_user,mrp.workorder.failure.reason.user,model_mrp_workorder_failure_reason,base.group_user,1,0,0,0
+access_mrp_workorder_failure_reason_manager,mrp.workorder.failure.reason.manager,model_mrp_workorder_failure_reason,mrp.group_mrp_manager,1,1,1,1
+access_mrp_workorder_failure_wizard_user,mrp.workorder.failure.wizard.user,model_mrp_workorder_failure_wizard,base.group_user,1,1,1,0

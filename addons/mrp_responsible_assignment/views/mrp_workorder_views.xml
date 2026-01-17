@@ -1,0 +1,48 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- Add responsible_id and failure_reason_id to workorder form -->
+        <record id="mrp_production_workorder_form_view_inherit_responsible" model="ir.ui.view">
+            <field name="name">mrp.production.work.order.form.inherit.responsible</field>
+            <field name="model">mrp.workorder</field>
+            <field name="inherit_id" ref="mrp.mrp_production_workorder_form_view_inherit"/>
+            <field name="arch" type="xml">
+                <xpath expr="//field[@name='workcenter_id']" position="after">
+                    <field name="responsible_id" widget="many2one_avatar_user"/>
+                </xpath>
+            </field>
+        </record>
+
+        <!-- Add responsible_id to workorder list -->
+        <record id="mrp_production_workorder_tree_editable_view_inherit_responsible" model="ir.ui.view">
+            <field name="name">mrp.production.work.order.list.inherit.responsible</field>
+            <field name="model">mrp.workorder</field>
+            <field name="inherit_id" ref="mrp.mrp_production_workorder_tree_editable_view"/>
+            <field name="arch" type="xml">
+                <xpath expr="//field[@name='workcenter_id']" position="after">
+                    <field name="responsible_id" widget="many2one_avatar_user" optional="hide"/>
+                </xpath>
+                <xpath expr="//field[@name='state']" position="before">
+                    <field name="failure_reason_id" optional="hide" invisible="not failure_reason_id"/>
+                </xpath>
+            </field>
+        </record>
+
+        <!-- Add filter for responsible_id in search -->
+        <record id="view_mrp_production_workorder_form_view_filter_inherit" model="ir.ui.view">
+            <field name="name">mrp.production.work.order.select.inherit.responsible</field>
+            <field name="model">mrp.workorder</field>
+            <field name="inherit_id" ref="mrp.view_mrp_production_workorder_form_view_filter"/>
+            <field name="arch" type="xml">
+                <xpath expr="//field[@name='workcenter_id']" position="after">
+                    <field name="responsible_id"/>
+                </xpath>
+                <xpath expr="//filter[@name='ready']" position="after">
+                    <filter string="My Work Orders" name="my_workorders" 
+                            domain="[('responsible_id', '=', uid)]"
+                            context="{'group_by': 'state'}"/>
+                </xpath>
+            </field>
+        </record>
+    </data>
+</odoo>

@@ -1,0 +1,11 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="0">
+        <!-- Production Masters Group -->
+        <record id="group_production_master" model="res.groups">
+            <field name="name">Production Master</field>
+            <field name="comment">Production masters who can be assigned to work orders</field>
+            <field name="implied_ids" eval="[(4, ref('mrp.group_mrp_user'))]"/>
+        </record>
+    </data>
+</odoo>

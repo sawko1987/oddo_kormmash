@@ -1,0 +1,40 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data noupdate="1">
+        <!-- Failure Reasons -->
+        <record id="failure_reason_equipment" model="mrp.workorder.failure.reason">
+            <field name="name">Оборудование неисправно</field>
+            <field name="sequence">10</field>
+            <field name="category">equipment</field>
+            <field name="description">Оборудование требует ремонта или обслуживания</field>
+        </record>
+        
+        <record id="failure_reason_material" model="mrp.workorder.failure.reason">
+            <field name="name">Недостаточно материалов</field>
+            <field name="sequence">20</field>
+            <field name="category">material</field>
+            <field name="description">Отсутствуют необходимые материалы или компоненты</field>
+        </record>
+        
+        <record id="failure_reason_quality" model="mrp.workorder.failure.reason">
+            <field name="name">Брак качества</field>
+            <field name="sequence">30</field>
+            <field name="category">quality</field>
+            <field name="description">Обнаружен брак в материалах или процессе производства</field>
+        </record>
+        
+        <record id="failure_reason_planning" model="mrp.workorder.failure.reason">
+            <field name="name">Изменение плана производства</field>
+            <field name="sequence">40</field>
+            <field name="category">planning</field>
+            <field name="description">Изменение плана производства или приоритетов</field>
+        </record>
+        
+        <record id="failure_reason_other" model="mrp.workorder.failure.reason">
+            <field name="name">Другое</field>
+            <field name="sequence">99</field>
+            <field name="category">other</field>
+            <field name="description">Прочие причины невыполнения</field>
+        </record>
+    </data>
+</odoo>

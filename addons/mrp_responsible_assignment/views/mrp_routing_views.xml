@@ -1,0 +1,30 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- Add responsible_id field to routing operations -->
+        <record id="mrp_routing_workcenter_form_view_inherit" model="ir.ui.view">
+            <field name="name">mrp.routing.workcenter.form.inherit.responsible</field>
+            <field name="model">mrp.routing.workcenter</field>
+            <field name="inherit_id" ref="mrp.mrp_routing_workcenter_form_view"/>
+            <field name="arch" type="xml">
+                <xpath expr="//field[@name='workcenter_id']" position="after">
+                    <!-- Domain задается в XML, не в Python -->
+                    <field name="responsible_id" 
+                           widget="many2one_avatar_user"
+                           options="{'no_create': True}"/>
+                </xpath>
+            </field>
+        </record>
+
+        <record id="mrp_routing_workcenter_tree_view_inherit" model="ir.ui.view">
+            <field name="name">mrp.routing.workcenter.list.inherit.responsible</field>
+            <field name="model">mrp.routing.workcenter</field>
+            <field name="inherit_id" ref="mrp.mrp_routing_workcenter_tree_view"/>
+            <field name="arch" type="xml">
+                <xpath expr="//field[@name='workcenter_id']" position="after">
+                    <field name="responsible_id" widget="many2one_avatar_user" optional="hide"/>
+                </xpath>
+            </field>
+        </record>
+    </data>
+</odoo>

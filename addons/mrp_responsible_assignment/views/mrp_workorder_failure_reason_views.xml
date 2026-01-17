@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- Failure Reason Tree View -->
+        <record id="mrp_workorder_failure_reason_tree_view" model="ir.ui.view">
+            <field name="name">mrp.workorder.failure.reason.tree</field>
+            <field name="model">mrp.workorder.failure.reason</field>
+            <field name="arch" type="xml">
+                <list string="Failure Reasons">
+                    <field name="sequence" widget="handle"/>
+                    <field name="name"/>
+                    <field name="category"/>
+                    <field name="active" widget="boolean_toggle"/>
+                </list>
+            </field>
+        </record>
+
+        <!-- Failure Reason Form View -->
+        <record id="mrp_workorder_failure_reason_form_view" model="ir.ui.view">
+            <field name="name">mrp.workorder.failure.reason.form</field>
+            <field name="model">mrp.workorder.failure.reason</field>
+            <field name="arch" type="xml">
+                <form string="Failure Reason">
+                    <sheet>
+                        <group>
+                            <group>
+                                <field name="name"/>
+                                <field name="sequence"/>
+                                <field name="category"/>
+                                <field name="active"/>
+                            </group>
+                            <group>
+                                <field name="description" placeholder="Description of the failure reason..."/>
+                            </group>
+                        </group>
+                    </sheet>
+                </form>
+            </field>
+        </record>
+
+        <!-- Failure Reason Action -->
+        <record id="action_mrp_workorder_failure_reason" model="ir.actions.act_window">
+            <field name="name">Failure Reasons</field>
+            <field name="res_model">mrp.workorder.failure.reason</field>
+            <field name="view_mode">list,form</field>
+            <field name="help" type="html">
+                <p class="o_view_nocontent_smiling_face">
+                    No failure reasons defined.
+                </p>
+                <p>
+                    Create failure reasons to track why work orders are blocked or cannot be completed.
+                </p>
+            </field>
+        </record>
+
+        <!-- Menu for Failure Reasons -->
+        <menuitem id="menu_mrp_workorder_failure_reason"
+                  name="Failure Reasons"
+                  action="action_mrp_workorder_failure_reason"
+                  parent="mrp.menu_mrp_configuration"
+                  sequence="50"/>
+    </data>
+</odoo>

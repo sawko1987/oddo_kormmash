@@ -1,0 +1,29 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <record id="mrp_workorder_failure_wizard_form" model="ir.ui.view">
+        <field name="name">mrp.workorder.failure.wizard.form</field>
+        <field name="model">mrp.workorder.failure.wizard</field>
+        <field name="arch" type="xml">
+            <form string="Report Problem">
+                <group>
+                    <field name="workorder_id" readonly="1"/>
+                    <field name="failure_reason_id" options="{'no_create': True}"/>
+                    <field name="failure_description" placeholder="Describe the problem..."/>
+                    <field name="block_workcenter"/>
+                </group>
+                <footer>
+                    <button name="action_report_failure" string="Report" type="object" class="btn-primary"/>
+                    <button string="Cancel" class="btn-secondary" special="cancel"/>
+                </footer>
+            </form>
+        </field>
+    </record>
+
+    <record id="action_mrp_workorder_failure_wizard" model="ir.actions.act_window">
+        <field name="name">Report Problem</field>
+        <field name="res_model">mrp.workorder.failure.wizard</field>
+        <field name="view_mode">form</field>
+        <field name="target">new</field>
+        <field name="context">{'default_workorder_id': active_id}</field>
+    </record>
+</odoo>

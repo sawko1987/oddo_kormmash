@@ -1,0 +1,54 @@
+<?xml version="1.0" encoding="utf-8"?>
+<odoo>
+    <data>
+        <!-- Pivot Report for Failure Reasons -->
+        <record id="mrp_workorder_failure_pivot_view" model="ir.ui.view">
+            <field name="name">mrp.workorder.failure.pivot</field>
+            <field name="model">mrp.workorder</field>
+            <field name="arch" type="xml">
+                <pivot string="Work Order Failures Analysis" sample="1">
+                    <field name="failure_reason_id" type="row"/>
+                    <field name="state" type="col"/>
+                    <field name="date_start" interval="month" type="col"/>
+                    <field name="id" type="measure"/>
+                </pivot>
+            </field>
+        </record>
+
+        <!-- Graph Report for Failure Reasons -->
+        <record id="mrp_workorder_failure_graph_view" model="ir.ui.view">
+            <field name="name">mrp.workorder.failure.graph</field>
+            <field name="model">mrp.workorder</field>
+            <field name="arch" type="xml">
+                <graph string="Work Order Failures Analysis" type="bar" stacked="1">
+                    <field name="failure_reason_id" type="row"/>
+                    <field name="state" type="col"/>
+                </graph>
+            </field>
+        </record>
+
+        <!-- Action for Failure Report -->
+        <record id="action_mrp_workorder_failure_report" model="ir.actions.act_window">
+            <field name="name">Failure Analysis</field>
+            <field name="res_model">mrp.workorder</field>
+            <field name="view_mode">pivot,graph</field>
+            <field name="domain">[('failure_reason_id', '!=', False)]</field>
+            <field name="context">{'search_default_group_by_failure_reason': 1}</field>
+            <field name="help" type="html">
+                <p class="o_view_nocontent_smiling_face">
+                    No failures reported yet.
+                </p>
+                <p>
+                    This report shows analysis of work order failures by reason and status.
+                </p>
+            </field>
+        </record>
+
+        <!-- Menu for Failure Report -->
+        <menuitem id="menu_mrp_workorder_failure_report"
+                  name="Failure Analysis"
+                  action="action_mrp_workorder_failure_report"
+                  parent="mrp.menu_mrp_reporting"
+                  sequence="50"/>
+    </data>
+</odoo>
