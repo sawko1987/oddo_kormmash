@@ -129,12 +129,15 @@ class ImportHelpersMixin(models.AbstractModel):
     def get_or_create_workcenter(self, workshop_name, workcenter_cache=None):
         """Получить или создать рабочий центр по цеху
         
+        Если цех не указан, создается или возвращается дефолтный цех "Не указан".
+        
         Args:
             workshop_name: Название цеха/рабочего центра
             workcenter_cache: Опциональный кеш для рабочих центров {workshop_name: workcenter}
         """
+        # Если цех не указан, используем дефолтный
         if not workshop_name or not str(workshop_name).strip():
-            return False
+            workshop_name = "Не указан"
         
         workshop_name = str(workshop_name).strip()
         
@@ -150,6 +153,7 @@ class ImportHelpersMixin(models.AbstractModel):
             workcenter = self.env['mrp.workcenter'].create({
                 'name': workshop_name,
             })
+            _logger.debug("Создан рабочий центр: '%s'", workshop_name)
         
         # Сохраняем в кеш
         if workcenter_cache is not None:

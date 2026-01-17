@@ -55,13 +55,14 @@ class XlsParserMixin(models.AbstractModel):
                 wb = xlrd.open_workbook(
                     file_contents=file_contents,
                     ignore_workbook_corruption=True,
-                    logfile=xlrd_log  # Перенаправляем вывод предупреждений
+                    logfile=xlrd_log,
+                    encoding_override='cp1251'  # Указываем кодировку Windows-1251
                 )
                 # Если есть предупреждения, логируем их как debug, но не показываем пользователю
                 xlrd_warnings = xlrd_log.getvalue()
                 if xlrd_warnings:
                     _logger.debug("xlrd warnings (suppressed): %s", xlrd_warnings)
-                _logger.info("Шаг 2: [OK] Файл успешно открыт. Количество листов: %d", wb.nsheets)
+                _logger.info("Шаг 2: [OK] Файл успешно открыт с кодировкой cp1251. Количество листов: %d", wb.nsheets)
             except CompDocError as e:
                 _logger.error("CompDocError (OLE2 corruption): %s", str(e))
                 raise UserError(_("The file appears to be corrupted or in an unsupported format. "
@@ -111,9 +112,9 @@ class XlsParserMixin(models.AbstractModel):
                     if processed_count <= 5 or processed_count % 100 == 0:
                         row_num = row_data.get('row_number')
                         object_name = row_data.get('object_name', '').strip()
-                        product_name = row_data.get('product_name', '').strip()
-                        _logger.info("Обработано строк: %d/%d (строка %d: row_num=%s, object_name=%s, product_name=%s)", 
-                                   processed_count, total_rows_to_process, row_idx, row_num, object_name, product_name)
+                        object_type = row_data.get('object_type', '').strip()
+                        _logger.info("Обработано строк: %d/%d (строка %d: row_num=%s, type=%s, name=%s)", 
+                                   processed_count, total_rows_to_process, row_idx, row_num, object_type, object_name)
                 except Exception as e:
                     error_count += 1
                     _logger.warning("ОШИБКА при парсинге строки %d: %s", row_idx, str(e))
@@ -167,42 +168,75 @@ class XlsParserMixin(models.AbstractModel):
         for key, col_idx in self.COLUMN_MAPPING.items():
             if col_idx < sheet.ncols:
                 cell_value = sheet.cell_value(row_idx, col_idx)
+                
                 # Обработка различных типов данных
                 if isinstance(cell_value, float):
                     # Проверка на NaN
                     if cell_value != cell_value:  # NaN check
                         # Для числовых полей NaN преобразуем в None, для остальных в ''
-                        if key in ('qty_per_detail', 'norm_per_product', 'owner_row_number', 'hierarchy_level'):
+                        if key in ('qty_per_detail', 'norm_per_product', 'row_number', 'owner_row_number', 'hierarchy_level'):
                             cell_value = None
                         else:
                             cell_value = ''
-                    # Проверка на целое число (для owner_row_number и hierarchy_level)
-                    elif key in ('owner_row_number', 'hierarchy_level') and cell_value == int(cell_value):
+                    # Проверка на целое число (для row_number, owner_row_number и hierarchy_level)
+                    elif key in ('row_number', 'owner_row_number', 'hierarchy_level') and cell_value == int(cell_value):
                         cell_value = int(cell_value)
                     # Для остальных числовых полей оставляем как float
                 elif cell_value is None:
                     # Для числовых полей None оставляем как None, для остальных в ''
-                    if key in ('qty_per_detail', 'norm_per_product', 'owner_row_number', 'hierarchy_level'):
+                    if key in ('qty_per_detail', 'norm_per_product', 'row_number', 'owner_row_number', 'hierarchy_level'):
                         cell_value = None
                     else:
                         cell_value = ''
                 elif isinstance(cell_value, str):
-                    # Для числовых полей пустые строки преобразуем в None
-                    if key in ('qty_per_detail', 'norm_per_product', 'owner_row_number', 'hierarchy_level'):
-                        if not cell_value.strip():
+                    # ИСПРАВЛЕНИЕ ПРОБЛЕМЫ 1: Конвертация кодировки из latin1 в cp1251
+                    try:
+                        cell_bytes = cell_value.encode('latin1')
+                        cell_value = cell_bytes.decode('cp1251')
+                    except (UnicodeEncodeError, UnicodeDecodeError):
+                        # Если конвертация не удалась, оставляем как есть
+                        pass
+                    
+                    # ИСПРАВЛЕНИЕ ПРОБЛЕМЫ 3: Парсинг количества из строк
+                    if key in ('qty_per_detail', 'norm_per_product'):
+                        cell_value = cell_value.strip().replace(',', '.')
+                        if cell_value == '':
                             cell_value = None
+                        else:
+                            try:
+                                cell_value = float(cell_value)
+                            except ValueError:
+                                _logger.warning("Строка %d, колонка %s: не удалось преобразовать '%s' в число", 
+                                              row_idx, key, cell_value)
+                                cell_value = None
+                    # Для row_number, owner_row_number и hierarchy_level тоже обрабатываем строки
+                    elif key in ('row_number', 'owner_row_number', 'hierarchy_level'):
+                        cell_value = cell_value.strip().replace(',', '.')
+                        if cell_value == '':
+                            cell_value = None
+                        else:
+                            try:
+                                cell_value = int(float(cell_value))
+                            except ValueError:
+                                _logger.warning("Строка %d, колонка %s: не удалось преобразовать '%s' в целое число", 
+                                              row_idx, key, cell_value)
+                                cell_value = None
+                    # Для остальных строковых полей просто убираем пробелы по краям
+                    elif not key.startswith('skip_'):
+                        cell_value = cell_value.strip()
+                
                 row_data[key] = cell_value
             else:
                 # Для числовых полей используем None вместо ''
-                if key in ('qty_per_detail', 'norm_per_product', 'owner_row_number', 'hierarchy_level'):
+                if key in ('qty_per_detail', 'norm_per_product', 'row_number', 'owner_row_number', 'hierarchy_level'):
                     row_data[key] = None
                 else:
                     row_data[key] = ''
         
         # Обрабатываем строки, если есть данные (не пропускаем, если пустой только product_name)
         row_num = row_data.get('row_number')
-        object_name = row_data.get('object_name', '').strip()
-        product_name = row_data.get('product_name', '').strip()
+        object_name = row_data.get('object_name', '').strip() if isinstance(row_data.get('object_name'), str) else ''
+        product_name = row_data.get('product_name', '').strip() if isinstance(row_data.get('product_name'), str) else ''
         object_type = str(row_data.get('object_type', '')).strip()
         code_1c = row_data.get('code_1c', '')
         
